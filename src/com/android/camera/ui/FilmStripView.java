@@ -1582,8 +1582,8 @@ public class FilmStripView extends ViewGroup implements BottomControlsListener {
                 slideViewBack(mViewItem[i]);
             }
         }
-        if (mCenterX == mViewItem[mCurrentItem].getCenterX()
-                && getCurrentViewType() == ImageData.VIEW_TYPE_STICKY) {
+//        if (mCenterX == mViewItem[mCurrentItem].getCenterX() &&
+        if (getCurrentViewType() == ImageData.VIEW_TYPE_STICKY) {
             // Special case for scrolling onto the camera preview after removal.
             mController.goToFullScreen();
         }

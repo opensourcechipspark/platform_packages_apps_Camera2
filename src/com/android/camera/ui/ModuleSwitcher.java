@@ -25,6 +25,7 @@ import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -34,6 +35,7 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout.LayoutParams;
 import android.widget.LinearLayout;
 
+import com.android.camera.CameraHolder;
 import com.android.camera.util.CameraUtil;
 import com.android.camera.util.GcamHelper;
 import com.android.camera.util.PhotoSphereHelper;
@@ -76,6 +78,7 @@ public class ModuleSwitcher extends RotateImageView
     private View mParent;
     private boolean mShowingPopup;
     private boolean mNeedsAnimationSetup;
+    private boolean mEnablePanorama;
     private Drawable mIndicator;
 
     private float mTranslationX = 0;
@@ -111,11 +114,15 @@ public class ModuleSwitcher extends RotateImageView
         // Always decrement one because of GCam.
         --numDrawIds;
 
+        mEnablePanorama = CameraHolder.instance().getBackCameraId() != -1;
+        Log.d(TAG, "shoule enable panorama? " + mEnablePanorama);
+        numDrawIds -= mEnablePanorama ? 0 : 1;
         int[] drawids = new int[numDrawIds];
         int[] moduleids = new int[numDrawIds];
         int ix = 0;
         for (int i = 0; i < DRAW_IDS.length; i++) {
-            if (i == LIGHTCYCLE_MODULE_INDEX && !PhotoSphereHelper.hasLightCycleCapture(context)) {
+            if (i == LIGHTCYCLE_MODULE_INDEX && !PhotoSphereHelper.hasLightCycleCapture(context)
+                    || (i == WIDE_ANGLE_PANO_MODULE_INDEX && !mEnablePanorama)) {
                 continue; // not enabled, so don't add to UI
             }
             if (i == GCAM_MODULE_INDEX) {

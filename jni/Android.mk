@@ -40,6 +40,11 @@ LOCAL_SRC_FILES := \
         feature_stab/src/dbreg/dbstabsmooth.cpp \
         feature_stab/src/dbreg/vp_motionmodel.c
 
+ifeq ($(strip $(TARGET_BOARD_PLATFORM)),rk30xxb)
+LOCAL_CFLAGS += -DTARGET_BOARD_PLATFORM_RK30XXB
+endif
+
+
 ifeq ($(TARGET_ARCH), arm)
         LOCAL_SDK_VERSION := 9
 endif
