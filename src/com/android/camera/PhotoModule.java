@@ -18,6 +18,8 @@ package com.android.camera;
 
 import android.annotation.TargetApi;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.ContentProviderClient;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -25,6 +27,7 @@ import android.content.Intent;
 import android.content.SharedPreferences.Editor;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
+import android.graphics.Bitmap.Config;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera.CameraInfo;
@@ -50,6 +53,7 @@ import android.view.KeyEvent;
 import android.view.OrientationEventListener;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.Toast;
 
 import com.android.camera.CameraManager.CameraAFCallback;
 import com.android.camera.CameraManager.CameraAFMoveCallback;
@@ -63,6 +67,7 @@ import com.android.camera.exif.Rational;
 import com.android.camera.ui.CountDownView.OnCountDownFinishedListener;
 import com.android.camera.ui.ModuleSwitcher;
 import com.android.camera.ui.RotateTextToast;
+import com.android.camera.ui.FaceView;
 import com.android.camera.util.ApiHelper;
 import com.android.camera.util.CameraUtil;
 import com.android.camera.util.GcamHelper;
@@ -83,8 +88,10 @@ public class PhotoModule
         FocusOverlayManager.Listener,
         CameraPreference.OnPreferenceChangedListener,
         ShutterButton.OnShutterButtonListener,
+        ShutterButton.RepeatListener,
         MediaSaveService.Listener,
         OnCountDownFinishedListener,
+		FaceView.SmileFaceListener,
         SensorEventListener {
 
     private static final String TAG = "CAM_PhotoModule";
@@ -169,7 +176,35 @@ public class PhotoModule
     private Runnable mDoSnapRunnable = new Runnable() {
         @Override
         public void run() {
-            onShutterButtonClick();
+        	onShutterButtonClick();
+        }
+    };
+    private boolean mFaceSnapShotDone = true;
+    private boolean mIsSmileClick=false;
+	private void doSmileSnap(){
+		if(mUI.hasFaces()){
+			if(mFaceSnapShotDone){ // face snap on idle state.
+				mFaceSnapShotDone = false;
+				mIsSmileClick=true;
+				onShutterButtonFocus(true);
+	        	onShutterButtonClick();//if onShutterButtonClick faild, smileFaceListener will be null,
+	        	onShutterButtonFocus(false);
+	        	mIsSmileClick=false;
+	        	//cause smileSnap loop stopped.
+				if(mFaceSnapShotDone == true){
+					mUI.setFaceListener(this);
+				}
+			}
+        	
+	   }else{
+			//set listener
+			mUI.setFaceListener(this);
+		}
+	}
+    private Runnable mDoSmileFaceSnapRunnable = new Runnable() {
+        @Override
+        public void run() {
+	        doSmileSnap();
         }
     };
 
@@ -253,6 +288,11 @@ public class PhotoModule
     // True if all the parameters needed to start preview is ready.
     private boolean mCameraPreviewParamsReady = false;
 
+    
+    public int getMaxNumDetectedFaces(){
+    	return mParameters.getMaxNumDetectedFaces();
+    }
+    
     private MediaSaveService.OnMediaSavedListener mOnMediaSavedListener =
             new MediaSaveService.OnMediaSavedListener() {
                 @Override
@@ -361,7 +401,7 @@ public class PhotoModule
     @Override
     public void init(CameraActivity activity, View parent) {
         mActivity = activity;
-        mUI = new PhotoUI(activity, this, parent);
+        mUI = new PhotoUI(activity, this, this,parent);
         mPreferences = new ComboPreferences(mActivity);
         CameraSettings.upgradeGlobalPreferences(mPreferences.getGlobal());
         mCameraId = getPreferredCameraId(mPreferences);
@@ -428,8 +468,9 @@ public class PhotoModule
         if (mCameraDevice == null) {
             return;
         }
-        mCameraDevice.setPreviewTexture(null);
+        //mCameraDevice.setPreviewTexture(null);
         stopPreview();
+        mCameraDevice.setPreviewTexture(null);
     }
 
     private void setLocationPreference(String value) {
@@ -622,6 +663,15 @@ public class PhotoModule
         });
     }
 
+       @Override
+    public void onSmileFaceSnap() {
+		//delay 2s to start capture
+       ListPreference smilePref = mPreferenceGroup.findPreference(CameraSettings.KEY_SMILE_MODE);
+       Log.d("camera","startFaceDetection smile value="+smilePref.getValue());
+       if(smilePref.getValue().equals("on")){
+    	   mHandler.postDelayed(mDoSmileFaceSnapRunnable,2*1000);
+       }
+    }
     @Override
     public void startFaceDetection() {
         if (mFaceDetectionStarted) return;
@@ -632,13 +682,19 @@ public class PhotoModule
                     (info.facing == CameraInfo.CAMERA_FACING_FRONT));
             mCameraDevice.setFaceDetectionCallback(mHandler, mUI);
             mCameraDevice.startFaceDetection();
+			mFaceSnapShotDone = true;
+            mUI.setFaceListener(this);
         }
+        
     }
 
     @Override
     public void stopFaceDetection() {
         if (!mFaceDetectionStarted) return;
         if (mParameters.getMaxNumDetectedFaces() > 0) {
+			//set listener
+			mFaceSnapShotDone = false;
+			mUI.setFaceListener(null);
             mFaceDetectionStarted = false;
             mCameraDevice.setFaceDetectionCallback(null, null);
             mCameraDevice.stopFaceDetection();
@@ -756,6 +812,7 @@ public class PhotoModule
             
             int orientation = Exif.getOrientation(exif);
 
+            mActivity.updateStorageSpaceAndHint();
             if (!mIsImageCaptureIntent) {
                 // Calculate the width and the height of the jpeg.
                 Size s = mParameters.getPictureSize();
@@ -950,6 +1007,7 @@ public class PhotoModule
         mNamedImages.nameNewImage(mCaptureStartTime);
 
         mFaceDetectionStarted = false;
+        mFaceSnapShotDone = true;
         setCameraState(SNAPSHOT_IN_PROGRESS);
         UsageStatistics.onEvent(UsageStatistics.COMPONENT_CAMERA,
                 UsageStatistics.ACTION_CAPTURE_DONE, "Photo", 0,
@@ -1140,17 +1198,27 @@ public class PhotoModule
 
     @Override
     public void onShutterButtonClick() {
+    	if(!isButtonEnable){
+			mCustomToast.showToast(mActivity, R.string.alert_quick_take_picture_later, Toast.LENGTH_SHORT);
+			mFaceSnapShotDone = true;
+			return;
+		}
         if (mPaused || mUI.collapseCameraControls()
                 || (mCameraState == SWITCHING_CAMERA)
-                || (mCameraState == PREVIEW_STOPPED)) return;
+                || (mCameraState == PREVIEW_STOPPED)) {
+				mFaceSnapShotDone = true;
+				return;
+    	}
 
         if(!isAllowShutter){
+			mFaceSnapShotDone = true;
         	return;
         }
         // Do not take the picture if there is not enough storage.
         if (mActivity.getStorageSpaceBytes() <= Storage.LOW_STORAGE_THRESHOLD_BYTES) {
             Log.i(TAG, "Not enough space or storage not ready. remaining="
                     + mActivity.getStorageSpaceBytes());
+			mFaceSnapShotDone = true;
             return;
         }
         Log.v(TAG, "onShutterButtonClick: mCameraState=" + mCameraState);
@@ -1167,6 +1235,7 @@ public class PhotoModule
         if ((mFocusManager.isFocusingSnapOnFinish() || mCameraState == SNAPSHOT_IN_PROGRESS)
                 && !mIsImageCaptureIntent) {
             mSnapshotOnIdle = true;
+			mFaceSnapShotDone = true;
             return;
         }
 
@@ -1182,6 +1251,11 @@ public class PhotoModule
         // finished. If not, cancel the previous countdown and start a new one.
         if (mUI.isCountingDown()) {
             mUI.cancelCountDown();
+        }
+        ListPreference smilePref = mPreferenceGroup.findPreference(CameraSettings.KEY_SMILE_MODE);
+        if(smilePref.getValue().equals("on")&&mIsSmileClick){
+        	mUI.startCountDown(3, playSound);
+        	return;
         }
         if (seconds > 0) {
             mUI.startCountDown(seconds, playSound);
@@ -1440,8 +1514,8 @@ public class PhotoModule
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         switch (keyCode) {
-            case KeyEvent.KEYCODE_VOLUME_UP:
-            case KeyEvent.KEYCODE_VOLUME_DOWN:
+            //case KeyEvent.KEYCODE_VOLUME_UP:
+            //case KeyEvent.KEYCODE_VOLUME_DOWN:
             case KeyEvent.KEYCODE_FOCUS:
                 if (/*TODO: mActivity.isInCameraApp() &&*/ mFirstTimeInitialized) {
                     if (event.getRepeatCount() == 0) {
@@ -1473,13 +1547,13 @@ public class PhotoModule
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         switch (keyCode) {
-            case KeyEvent.KEYCODE_VOLUME_UP:
-            case KeyEvent.KEYCODE_VOLUME_DOWN:
-                if (/*mActivity.isInCameraApp() && */ mFirstTimeInitialized) {
-                    onShutterButtonClick();
-                    return true;
-                }
-                return false;
+            //case KeyEvent.KEYCODE_VOLUME_UP:
+            //case KeyEvent.KEYCODE_VOLUME_DOWN:
+            //    if (/*mActivity.isInCameraApp() && */ mFirstTimeInitialized) {
+            //        onShutterButtonClick();
+            //        return true;
+            //    }
+            //    return false;
             case KeyEvent.KEYCODE_FOCUS:
                 if (mFirstTimeInitialized) {
                     onShutterButtonFocus(false);
@@ -1651,6 +1725,10 @@ public class PhotoModule
         setFocusAreasIfSupported();
         setMeteringAreasIfSupported();
 
+        // initialize focus mode
+        mFocusManager.overrideFocusMode(null);
+        mParameters.setFocusMode(mFocusManager.getFocusMode());
+
         // Set picture size.
         String pictureSize = mPreferences.getString(
                 CameraSettings.KEY_PICTURE_SIZE, null);
@@ -1668,6 +1746,20 @@ public class PhotoModule
         List<Size> sizes = mParameters.getSupportedPreviewSizes();
         Size optimalSize = CameraUtil.getOptimalPreviewSize(mActivity, sizes,
                 (double) size.width / size.height);
+		
+        int forceSize_w=0,forceSize_h=0;
+		if (mParameters.get("rk-previwe-w-force")!=null)
+        	forceSize_w = mParameters.getInt("rk-previwe-w-force");
+		if (mParameters.get("rk-previwe-h-force")!=null)
+			forceSize_h = mParameters.getInt("rk-previwe-h-force");
+        if ((forceSize_w > 0) && (forceSize_h > 0)) {
+			optimalSize.width = forceSize_w;
+			optimalSize.height = forceSize_h;
+			Log.d(TAG,"Force preview size : "+optimalSize.width+"x"+optimalSize.height);
+		} else { 
+			Log.d(TAG,"No force preview size!");
+		}
+		
         Size original = mParameters.getPreviewSize();
         if (!original.equals(optimalSize)) {
             mParameters.setPreviewSize(optimalSize.width, optimalSize.height);
@@ -2061,5 +2153,295 @@ public class PhotoModule
     // TODO: Delete this function after old camera code is removed
     @Override
     public void onRestorePreferencesClicked() {}
+
+	@Override
+	public void onRepeat(View v, long duration, int repeatcount) {
+		if(repeatcount != -1){
+			isEndQuickTake = false;
+		}else{
+			isButtonEnable = true;
+			String isSupported = mParameters.get("rk-continous-supported");
+	        if (!"true".equals(isSupported)) {
+	        	onShutterButtonClick();
+	        }else{
+	        	if(isTakePicture){
+	        		setupPreview();
+	        		isTakePicture = false;
+	        	}
+	        }
+			isEndQuickTake = true;
+		}
+		mQuickTakePicture.removeMessages(QUICK_TAKE);
+		mQuickTakePicture.sendEmptyMessage(QUICK_TAKE);
+	}
+	
+	private boolean canQuickTakePicture = true;
+	private boolean isButtonEnable = true;
+	private boolean isEndQuickTake = false;
+	private boolean isTakePicture = false;
+	private final int QUICK_TAKE = 0x01;
+	private Handler mQuickTakePicture = new Handler(){
+		@Override
+		public void handleMessage(Message msg) {
+			switch (msg.what) {
+			case QUICK_TAKE:
+				if(!isEndQuickTake){
+					if(canQuickTakePicture && isButtonEnable){
+						preformTakeQuickSnapshot();
+					}else if(!isButtonEnable){
+						mCustomToast.showToast(mActivity, R.string.alert_quick_take_picture_to_limit, Toast.LENGTH_SHORT);
+					}
+				}else{
+					endQuickTakeAction();
+				}
+				break;
+
+			}
+		}
+		
+	};
+	
+	private void endQuickTakeAction(){
+		String isSupported = mParameters.get("rk-continous-supported");
+        if ("true".equals(isSupported)) {
+        	mParameters.set(KEY_CONTINUOUS_PIC_NUM, "1");
+        	mUI.quickTakePictureAnimate(null, 0,isEndQuickTake);
+        }
+		canQuickTakePicture = true;
+	}
+	
+	private void preformTakeQuickSnapshot(){
+		String isSupported = mParameters.get("rk-continous-supported");
+		if (!"true".equals(isSupported)) {
+        	canQuickTakePicture = false;
+        	return ;
+        }
+		if (mCameraDevice == null 
+				|| mCameraState == SWITCHING_CAMERA
+				|| mActivity.getMediaSaveService() == null
+				|| mActivity.getMediaSaveService().isQueueFull()) {
+			return;
+		}
+		if(mActivity.getMediaSaveService().hasImageNoSave()){
+			mCustomToast.showToast(mActivity, R.string.alert_quick_take_picture_later, Toast.LENGTH_SHORT);
+			return;
+		}
+		if(mParameters != null && mCameraDevice != null){
+			mParameters.setFocusMode(Parameters.FOCUS_MODE_AUTO);
+			mCameraDevice.setParameters(mParameters);
+			mCameraDevice.autoFocus(mHandler, mQuickSnapshotAutoFocusCallback);
+		}else{
+			takeQuickSnapshot();
+		}
+	}
+	
+	private final QuickSnapshotAutoFocusCallback mQuickSnapshotAutoFocusCallback =
+            new QuickSnapshotAutoFocusCallback();
+	private final class QuickSnapshotAutoFocusCallback implements CameraAFCallback {
+        @Override
+        public void onAutoFocus(
+                boolean focused, CameraProxy camera) {
+            if (mPaused) return;
+            setCameraState(IDLE);
+            mFocusManager.onAutoFocus(focused, mUI.isShutterPressed());
+            takeQuickSnapshot();
+        }
+    }
+
+	public void takeQuickSnapshot() {
+		// Only take snapshots if video snapshot is supported by device
+		String isSupported = mParameters.get("rk-continous-supported");
+        if (!"true".equals(isSupported)) {
+        	canQuickTakePicture = false;
+        	return ;
+        }
+		if (mCameraDevice == null 
+				|| mCameraState == SWITCHING_CAMERA
+				|| mActivity.getMediaSaveService() == null
+				|| mActivity.getMediaSaveService().isQueueFull()) {
+			return;
+		}
+		if(mActivity.getMediaSaveService().hasImageNoSave()){
+			mCustomToast.showToast(mActivity, R.string.alert_quick_take_picture_later, Toast.LENGTH_SHORT);
+			return;
+		}
+		if(!canQuickTakePicture){
+			return;
+		}
+		// Set rotation and gps data.
+		canQuickTakePicture = false;
+		mCaptureStartTime = System.currentTimeMillis();
+        mPostViewPictureCallbackTime = 0;
+        mJpegImageData = null;
+        // Set rotation and gps data.
+        int orientation;
+        // We need to be consistent with the framework orientation (i.e. the
+        // orientation of the UI.) when the auto-rotate screen setting is on.
+        if (mActivity.isAutoRotateScreen()) {
+            orientation = (360 - mDisplayRotation) % 360;
+        } else {
+            orientation = mOrientation;
+        }
+        mJpegRotation = CameraUtil.getJpegRotation(mCameraId, orientation);
+        mParameters.setRotation(mJpegRotation);
+        Location loc = mLocationManager.getCurrentLocation();
+        CameraUtil.setGpsParameters(mParameters, loc);
+        mParameters.set(KEY_CONTINUOUS_PIC_NUM, String.valueOf(MAX_QUICK_TAKE_NUM));
+        mCameraDevice.setParameters(mParameters);
+
+		Log.v(TAG, "Video snapshot start");
+		quickTakeCount = 0;
+		isTakePicture = true;
+		mCameraDevice.takePicture(mHandler, new QuickShutterCallback(), null, null,
+				new QuickJpegPictureCallback(loc));
+		mNamedImages.nameNewImage(mCaptureStartTime);
+
+        UsageStatistics.onEvent(UsageStatistics.COMPONENT_CAMERA,
+                UsageStatistics.ACTION_CAPTURE_DONE, "Photo", 0,
+                UsageStatistics.hashFileName(mNamedImages.mQueue.lastElement().title + ".jpg"));
+	}
+	
+	private final class QuickShutterCallback implements CameraShutterCallback {
+		@Override
+		public void onShutter(CameraProxy camera) {
+		}
+	}
+	private String KEY_CONTINUOUS_PIC_NUM = "rk-continous-pic-num";
+	private final int MAX_QUICK_TAKE_NUM = 1000;
+	private int quickTakeCount = 0;
+	private CustomToast mCustomToast;
+	private final class QuickJpegPictureCallback implements
+			CameraPictureCallback {
+		Location mLocation;
+
+		public QuickJpegPictureCallback(Location loc) {
+			mLocation = loc;
+		}
+
+		@Override
+		public void onPictureTaken(final byte[] jpegData, CameraProxy camera) {
+			mCaptureStartTime = System.currentTimeMillis();
+			mNamedImages.nameNewImage(mCaptureStartTime);
+			if (mPaused) {
+				return;
+			}
+			
+			ExifInterface exif = Exif.getExif(jpegData);
+
+			try {
+				Class<android.os.Build> build_class = android.os.Build.class;
+				java.lang.reflect.Field manu_field = build_class
+						.getField("MANUFACTURER");
+				String make = (String) manu_field.get(new android.os.Build());
+				ExifTag make_tag = exif.buildTag(ExifInterface.TAG_MAKE, make);
+				exif.setTag(make_tag);
+
+				java.lang.reflect.Field field2 = build_class.getField("MODEL");
+				String model = (String) field2.get(new android.os.Build());
+				ExifTag model_tag = exif.buildTag(ExifInterface.TAG_MODEL,
+						model);
+				exif.setTag(model_tag);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+
+			int orientation = Exif.getOrientation(exif);
+
+			mActivity.updateStorageSpaceAndHint();
+			// Calculate the width and the height of the jpeg.
+			Size s = mParameters.getPictureSize();
+			int width, height;
+			if ((mJpegRotation + orientation) % 180 == 0) {
+				width = s.width;
+				height = s.height;
+			} else {
+				width = s.height;
+				height = s.width;
+			}
+			NamedEntity name = mNamedImages.getNextNameEntity();
+			String title = (name == null) ? null : name.title;
+			long date = (name == null) ? -1 : name.date;
+
+			// Handle debug mode outputs
+			if (mDebugUri != null) {
+				// If using a debug uri, save jpeg there.
+				saveToDebugUri(jpegData);
+
+				// Adjust the title of the debug image shown in mediastore.
+				if (title != null) {
+					title = DEBUG_IMAGE_PREFIX + title;
+				}
+			}
+
+			if (!isEndQuickTake) {
+				if (title == null) {
+					Log.e(TAG, "Unbalanced name/data pair");
+				} else {
+					if (date == -1)
+						date = mCaptureStartTime;
+					if (mHeading >= 0) {
+						// heading direction has been updated by the sensor.
+						ExifTag directionRefTag = exif.buildTag(
+								ExifInterface.TAG_GPS_IMG_DIRECTION_REF,
+								ExifInterface.GpsTrackRef.MAGNETIC_DIRECTION);
+						ExifTag directionTag = exif.buildTag(
+								ExifInterface.TAG_GPS_IMG_DIRECTION,
+								new Rational(mHeading, 1));
+						exif.setTag(directionRefTag);
+						exif.setTag(directionTag);
+					}
+					if(mActivity.getMediaSaveService().hasImageNoSave() || quickTakeCount > MediaSaveService.QUICK_TAKE_IMAGE_MAX_NUM){
+						isButtonEnable = false;
+						mActivity.getMediaSaveService().setFullQuickTake();
+						mCustomToast.showToast(mActivity, R.string.alert_quick_take_picture_to_limit, Toast.LENGTH_SHORT);
+						endQuickTakeAction();
+						return;
+					}else{
+						quickTakeCount += 1;
+						CustomToast.hide();
+						mActivity.getMediaSaveService().addImage(jpegData, title,
+							date, mLocation, width, height, orientation, exif,
+							mOnMediaSavedListener, mContentResolver);
+					}
+				}
+				// Animate capture with real jpeg data instead of a preview
+				// frame.
+//				mUI.animateCapture(jpegData, orientation, mMirror);
+				mUI.quickTakePictureAnimate(jpegData, orientation,isEndQuickTake);
+			} else {
+				endQuickTakeAction();
+			}
+		}
+	}
+}
+
+class CustomToast {
+	private static Toast mToast;
+	private static Handler mhandler = new Handler();
+	private static Runnable r = new Runnable() {
+		public void run() {
+			if(mToast != null)
+				mToast.cancel();
+		};
+	};
+	
+	public static void hide(){
+		mhandler.post(r);
+	}
+
+	public static void showToast(Context context, String text, int duration) {
+		mhandler.removeCallbacks(r);
+		if (null != mToast) {
+			mToast.setText(text);
+		} else {
+			mToast = Toast.makeText(context, text, Toast.LENGTH_LONG);
+		}
+		mhandler.postDelayed(r, 5000);
+		mToast.show();
+	}
+
+	public static void showToast(Context context, int strId, int duration) {
+		showToast(context, context.getString(strId), duration);
+	}
 
 }

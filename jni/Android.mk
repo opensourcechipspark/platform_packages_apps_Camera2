@@ -1,5 +1,6 @@
 LOCAL_PATH:= $(call my-dir)
 
+ifeq ($(filter libjni_mosaic libjni_tinyplanet, $(PRODUCT_GOOGLE_PREBUILT_MODULES)), )
 include $(CLEAR_VARS)
 
 LOCAL_C_INCLUDES := \
@@ -77,4 +78,4 @@ LOCAL_CFLAGS    += -ffast-math -O3 -funroll-loops
 LOCAL_ARM_MODE := arm
 
 include $(BUILD_SHARED_LIBRARY)
-
+endif

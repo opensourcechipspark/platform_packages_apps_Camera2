@@ -39,6 +39,7 @@ import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Looper;
 import android.os.Handler;
 import android.os.Message;
 import android.os.ParcelFileDescriptor;
@@ -55,6 +56,8 @@ import android.widget.Toast;
 
 import com.android.camera.CameraManager.CameraPictureCallback;
 import com.android.camera.CameraManager.CameraProxy;
+import com.android.camera.CameraManager.CameraAFCallback;
+import com.android.camera.VideoFocusManager.Listener;
 import com.android.camera.app.OrientationManager;
 import com.android.camera.exif.ExifInterface;
 import com.android.camera.ui.RotateTextToast;
@@ -71,11 +74,14 @@ import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
 
+
+
 public class VideoModule implements CameraModule,
     VideoController,
     CameraPreference.OnPreferenceChangedListener,
     ShutterButton.OnShutterButtonListener,
     MediaRecorder.OnErrorListener,
+    VideoFocusManager.Listener,
     MediaRecorder.OnInfoListener {
 
     private static final String TAG = "CAM_VideoModule";
@@ -87,7 +93,7 @@ public class VideoModule implements CameraModule,
     private static final int SHOW_TAP_TO_SNAPSHOT_TOAST = 7;
     private static final int SWITCH_CAMERA = 8;
     private static final int SWITCH_CAMERA_START_ANIMATION = 9;
-
+    private static final int SHOW_TAP_TO_FOCUS_TOAST = 10;
     private static final int SCREEN_DELAY = 2 * 60 * 1000;
 
     private static final long SHUTTER_BUTTON_TIMEOUT = 500L; // 500ms
@@ -172,6 +178,18 @@ public class VideoModule implements CameraModule,
 
     private int mZoomValue;  // The current zoom value.
 
+    private VideoFocusManager mVideoFocusManager;
+    private long mFocusStartTime;
+    // These latency time are for the CameraLatency test.
+    public long mAutoFocusTime;
+    private boolean mMirror;
+    
+    private boolean mFocusAreaSupported;
+    private boolean mMeteringAreaSupported;
+    private boolean mFirstTimeInitialized;
+    private Parameters mInitialParams;
+    private final AutoFocusCallback mAutoFocusCallback = new AutoFocusCallback();
+    
     private final MediaSaveService.OnMediaSavedListener mOnVideoSavedListener =
             new MediaSaveService.OnMediaSavedListener() {
                 @Override
@@ -214,6 +232,81 @@ public class VideoModule implements CameraModule,
             return;
         }
         mParameters = mCameraDevice.getParameters();
+        initializeCapabilities();
+        if (mVideoFocusManager == null) initializeFocusManager();
+      
+    }
+
+    private void initializeCapabilities() {
+        // TODO Auto-generated method stub
+        mInitialParams = mCameraDevice.getParameters();
+        mFocusAreaSupported = CameraUtil.isFocusAreaSupported(mInitialParams);
+        mMeteringAreaSupported = CameraUtil.isMeteringAreaSupported(mInitialParams);
+    }
+
+    private void initializeFocusManager() {
+        // TODO Auto-generated method stub
+        Log.v(TAG,"------------VideoFocus init --------------1");
+        if (mVideoFocusManager != null) {
+            mVideoFocusManager.removeMessages();
+        }else {
+            Log.v(TAG,"------------VideoFocus init --------------2");
+            CameraInfo info = CameraHolder.instance().getCameraInfo()[mCameraId];
+            mMirror = (info.facing == CameraInfo.CAMERA_FACING_FRONT);
+            mVideoFocusManager = new VideoFocusManager(mParameters,this,mUI,mMirror);
+            mFirstTimeInitialized = true;
+        }
+        //showTapToFocusToast();
+        //autoFocus();
+    }
+    private final class AutoFocusCallback implements CameraAFCallback {
+        @Override
+        public void onAutoFocus(
+                boolean focused, CameraProxy camera) {
+            if (mPaused) return;
+
+            mAutoFocusTime = System.currentTimeMillis() - mFocusStartTime;
+            Log.v(TAG, "mAutoFocusTime = " + mAutoFocusTime + "ms");
+            setCameraState(IDLE);
+            mVideoFocusManager.onAutoFocus(focused, false/*(mUI.isShutterPressed()*/);
+        }
+    }
+    private void showTapToFocusToast() {
+        // TODO: Use a toast?
+        new RotateTextToast(mActivity, R.string.tap_to_focus, 0).show();
+        // Clear the preference.
+        Editor editor = mPreferences.edit();
+        editor.putBoolean(CameraSettings.KEY_CAMERA_FIRST_USE_HINT_SHOWN, false);
+        editor.apply();
+    }
+    
+    public void autoFocus() {
+        mFocusStartTime = System.currentTimeMillis();
+        mCameraDevice.autoFocus(mHandler, mAutoFocusCallback);
+        setCameraState(FOCUSING);
+    }
+
+    public void cancelAutoFocus() {
+    	if (mCameraDevice == null) {
+            Log.v(TAG, "already cancelAutoFocus.");
+            return;
+        }
+        mCameraDevice.cancelAutoFocus();
+        setCameraState(IDLE);
+        //setCameraParameters(UPDATE_PARAM_PREFERENCE);
+    }
+    private void setCameraState(int state) {
+        //mCameraState = state;
+        switch (state) {
+            case VideoController.PREVIEW_STOPPED:
+            case VideoController.SNAPSHOT_IN_PROGRESS:
+            case VideoController.SWITCHING_CAMERA:
+                //mUI.enableGestures(false);
+                break;
+            case VideoController.IDLE:
+                //mUI.enableGestures(true);
+                break;
+        }
     }
 
     // This Handler is used to post message back onto the main thread of the
@@ -272,7 +365,10 @@ public class VideoModule implements CameraModule,
                     mSwitchingCamera = false;
                     break;
                 }
-
+                case SHOW_TAP_TO_FOCUS_TOAST: {
+                    showTapToFocusToast();
+                    break;
+                }
                 default:
                     Log.v(TAG, "Unhandled message: " + msg.what);
                     break;
@@ -378,7 +474,16 @@ public class VideoModule implements CameraModule,
     // Preview area is touched. Take a picture.
     @Override
     public void onSingleTapUp(View view, int x, int y) {
-        takeASnapshot();
+    	if (mPaused || mCameraDevice == null || !mFirstTimeInitialized
+                /*|| mCameraState == SNAPSHOT_IN_PROGRESS
+                || mCameraState == SWITCHING_CAMERA
+                || mCameraState == PREVIEW_STOPPED*/) {
+            return;
+        }
+
+        // Check if metering area or focus area is supported.
+        if (!mFocusAreaSupported && !mMeteringAreaSupported) return;
+        mVideoFocusManager.onSingleTapUp(x, y);
     }
 
     private void takeASnapshot() {
@@ -438,9 +543,9 @@ public class VideoModule implements CameraModule,
         }
 
         // Show the toast after getting the first orientation changed.
-        if (mHandler.hasMessages(SHOW_TAP_TO_SNAPSHOT_TOAST)) {
-            mHandler.removeMessages(SHOW_TAP_TO_SNAPSHOT_TOAST);
-            showTapToSnapshotToast();
+        if (mHandler.hasMessages(SHOW_TAP_TO_FOCUS_TOAST)) {
+            mHandler.removeMessages(SHOW_TAP_TO_FOCUS_TOAST);
+            showTapToFocusToast();
         }
     }
 
@@ -757,6 +862,7 @@ public class VideoModule implements CameraModule,
         if (!mPreviewing) return;
         mCameraDevice.stopPreview();
         mPreviewing = false;
+        if (mVideoFocusManager != null) mVideoFocusManager.onPreviewStopped();
     }
 
     private void closeCamera() {
@@ -771,6 +877,7 @@ public class VideoModule implements CameraModule,
         mCameraDevice = null;
         mPreviewing = false;
         mSnapshotInProgress = false;
+        mVideoFocusManager.onCameraReleased();
     }
 
     private void releasePreviewResources() {
@@ -965,7 +1072,6 @@ public class VideoModule implements CameraModule,
         }
         mMediaRecorder = new MediaRecorder();
 
-        setupMediaRecorderPreviewDisplay();
         // Unlock the camera object before passing it to media recorder.
         mCameraDevice.unlock();
         mMediaRecorder.setCamera(mCameraDevice.getCamera());
@@ -974,6 +1080,7 @@ public class VideoModule implements CameraModule,
         }
         mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.CAMERA);
         mMediaRecorder.setProfile(mProfile);
+        mMediaRecorder.setVideoSize(mProfile.videoFrameWidth, mProfile.videoFrameHeight);
         mMediaRecorder.setMaxDuration(mMaxVideoDurationInMs);
         if (mCaptureTimeLapse) {
             double fps = 1000 / (double) mTimeBetweenTimeLapseFrameCaptureMs;
@@ -1022,6 +1129,7 @@ public class VideoModule implements CameraModule,
             }
         }
         mMediaRecorder.setOrientationHint(rotation);
+        setupMediaRecorderPreviewDisplay();
 
         try {
             mMediaRecorder.prepare();
@@ -1463,6 +1571,7 @@ public class VideoModule implements CameraModule,
     @SuppressWarnings("deprecation")
     private void setCameraParameters() {
         mParameters.setPreviewSize(mDesiredPreviewWidth, mDesiredPreviewHeight);
+        mParameters.set("video-size", mProfile.videoFrameWidth+"x"+mProfile.videoFrameHeight);
         int[] fpsRange = CameraUtil.getMaxPreviewFpsRange(mParameters);
         if (fpsRange.length > 0) {
             mParameters.setPreviewFpsRange(
@@ -1492,11 +1601,12 @@ public class VideoModule implements CameraModule,
         if (mParameters.isZoomSupported()) {
             mParameters.setZoom(mZoomValue);
         }
-
+        CameraInfo info = CameraHolder.instance().getCameraInfo()[mCameraId];
+        mMirror = (info.facing == CameraInfo.CAMERA_FACING_FRONT);
         // Set continuous autofocus.
         List<String> supportedFocus = mParameters.getSupportedFocusModes();
         if (isSupported(Parameters.FOCUS_MODE_CONTINUOUS_VIDEO, supportedFocus)) {
-            mParameters.setFocusMode(Parameters.FOCUS_MODE_CONTINUOUS_VIDEO);
+            mParameters.setFocusMode(Parameters.FOCUS_MODE_AUTO);
         }
 
         mParameters.set(CameraUtil.RECORDING_HINT, CameraUtil.TRUE);
@@ -1527,7 +1637,15 @@ public class VideoModule implements CameraModule,
                 CameraProfile.QUALITY_HIGH);
         mParameters.setJpegQuality(jpegQuality);
 
+        boolean flag = false;
+        if (mPreviewing) {
+            stopPreview();
+            flag = true;
+        }
         mCameraDevice.setParameters(mParameters);
+        if (flag) {
+            startPreview();
+        }
         // Keep preview size up to date.
         mParameters = mCameraDevice.getParameters();
 
@@ -1609,7 +1727,12 @@ public class VideoModule implements CameraModule,
         CameraSettings.upgradeLocalPreferences(mPreferences.getLocal());
         openCamera();
         readVideoPreferences();
-        startPreview();
+        mParameters = mCameraDevice.getParameters();
+        CameraInfo info = CameraHolder.instance().getCameraInfo()[mCameraId];
+        mMirror = (info.facing == CameraInfo.CAMERA_FACING_FRONT);
+        //mVideoFocusManager.setMirror(mMirror);
+        mVideoFocusManager.setParameters(mParameters);
+        setupPreview();
         initializeVideoSnapshot();
         resizeForPreviewAspectRatio();
         initializeVideoControl();
@@ -1638,13 +1761,19 @@ public class VideoModule implements CameraModule,
 
     private void initializeVideoSnapshot() {
         if (mParameters == null) return;
-        if (CameraUtil.isVideoSnapshotSupported(mParameters) && !mIsVideoCaptureIntent) {
+        /*if (CameraUtil.isVideoSnapshotSupported(mParameters) && !mIsVideoCaptureIntent) {
             // Show the tap to focus toast if this is the first start.
             if (mPreferences.getBoolean(
                         CameraSettings.KEY_VIDEO_FIRST_USE_HINT_SHOWN, true)) {
                 // Delay the toast for one second to wait for orientation.
                 mHandler.sendEmptyMessageDelayed(SHOW_TAP_TO_SNAPSHOT_TOAST, 1000);
             }
+        }*/
+        // Show the tap to focus toast if this is the first start.
+        if (CameraUtil.isFocusAreaSupported(mParameters)&&mPreferences.getBoolean(
+                    CameraSettings.KEY_CAMERA_FIRST_USE_HINT_SHOWN, true)) {
+                // Delay the toast for one second to wait for orientation.
+                mHandler.sendEmptyMessageDelayed(SHOW_TAP_TO_FOCUS_TOAST, 500);
         }
     }
 
@@ -1809,5 +1938,15 @@ public class VideoModule implements CameraModule,
     @Override
     public void onPreviewUIDestroyed() {
         stopPreview();
+    }
+    
+    @Override
+    public void setFocusParameters() {
+        //setCameraParameters(UPDATE_PARAM_PREFERENCE);
+    }
+    /** Only called by UI thread. */
+    private void setupPreview() {
+        mVideoFocusManager.resetTouchFocus();
+        startPreview();
     }
 }

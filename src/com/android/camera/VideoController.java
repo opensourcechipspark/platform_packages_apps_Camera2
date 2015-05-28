@@ -21,7 +21,13 @@ import android.view.View;
 import com.android.camera.ShutterButton.OnShutterButtonListener;
 
 public interface VideoController extends OnShutterButtonListener {
-
+    public static final int PREVIEW_STOPPED = 0;
+    public static final int IDLE = 1;  // preview is active
+    // Focus is in progress. The exact focus state is in Focus.java.
+    public static final int FOCUSING = 2;
+    public static final int SNAPSHOT_IN_PROGRESS = 3;
+    // Switching between cameras.
+    public static final int SWITCHING_CAMERA = 4;
     public void onReviewDoneClicked(View view);
     public void onReviewCancelClicked(View viwe);
     public void onReviewPlayClicked(View view);

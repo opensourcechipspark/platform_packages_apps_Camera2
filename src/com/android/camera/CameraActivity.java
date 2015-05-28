@@ -30,6 +30,8 @@ import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
@@ -656,8 +658,7 @@ public class CameraActivity extends Activity
                         | SUPPORT_SHARE | SUPPORT_SHOW_ON_MAP;
                 break;
             case LocalData.LOCAL_VIDEO:
-                supported |= SUPPORT_DELETE | SUPPORT_INFO | SUPPORT_TRIM
-                        | SUPPORT_SHARE;
+                supported |= SUPPORT_DELETE | SUPPORT_INFO | SUPPORT_SHARE;
                 break;
             case LocalData.LOCAL_PHOTO_SPHERE:
                 supported |= SUPPORT_DELETE | SUPPORT_ROTATE | SUPPORT_INFO
@@ -1018,6 +1019,14 @@ public class CameraActivity extends Activity
 
         getWindow().requestFeature(Window.FEATURE_ACTION_BAR);
         setContentView(R.layout.camera_filmstrip);
+        try{
+        	PackageManager packageManager = getPackageManager();
+        	PackageInfo packInfo = packageManager.getPackageInfo(getPackageName(),0);
+        	String version = packInfo.versionName;
+        	Log.v(TAG, "=======Camera Version:"+version+"============");
+        }catch(Exception e){
+        	e.printStackTrace();
+        }
         mActionBar = getActionBar();
         mActionBar.addOnMenuVisibilityListener(this);
 

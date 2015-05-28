@@ -28,6 +28,8 @@ import android.graphics.drawable.ColorDrawable;
 import android.hardware.Camera;
 import android.hardware.Camera.Face;
 import android.os.AsyncTask;
+import android.os.Handler;
+import android.os.Message;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.TextureView;
@@ -43,12 +45,15 @@ import android.widget.Toast;
 
 import com.android.camera.CameraPreference.OnPreferenceChangedListener;
 import com.android.camera.FocusOverlayManager.FocusUI;
+import com.android.camera.ShutterButton.OnShutterButtonListener;
+import com.android.camera.ShutterButton.RepeatListener;
 import com.android.camera.ui.AbstractSettingPopup;
 import com.android.camera.ui.CameraControls;
 import com.android.camera.ui.CameraRootView;
 import com.android.camera.ui.CountDownView;
 import com.android.camera.ui.CountDownView.OnCountDownFinishedListener;
 import com.android.camera.ui.FaceView;
+import com.android.camera.ui.FaceView.SmileFaceListener;
 import com.android.camera.ui.FocusIndicator;
 import com.android.camera.ui.ModuleSwitcher;
 import com.android.camera.ui.PieRenderer;
@@ -71,6 +76,7 @@ public class PhotoUI implements PieListener,
     private final AnimationManager mAnimationManager;
     private CameraActivity mActivity;
     private PhotoController mController;
+    private PhotoModule mPhotoModule;
     private PreviewGestures mGestures;
 
     private View mRootView;
@@ -119,6 +125,11 @@ public class PhotoUI implements PieListener,
     private View mPreviewCover;
     private final Object mSurfaceTextureLock = new Object();
 
+    
+    public boolean isSupportSmilePhoto(){
+    	return mPhotoModule.getMaxNumDetectedFaces()>0;
+    }
+    
     public interface SurfaceTextureSizeChangedListener {
         public void onSurfaceTextureSizeChanged(int uncroppedWidth, int uncroppedHeight);
     }
@@ -137,7 +148,7 @@ public class PhotoUI implements PieListener,
         }
     };
 
-    private class DecodeTask extends AsyncTask<Void, Void, Bitmap> {
+    public class DecodeTask extends AsyncTask<Void, Void, Bitmap> {
         private final byte [] mData;
         private int mOrientation;
         private boolean mMirror;
@@ -150,7 +161,6 @@ public class PhotoUI implements PieListener,
 
         @Override
         protected Bitmap doInBackground(Void... params) {
-            // Decode image in background.
             Bitmap bitmap = CameraUtil.downSample(mData, DOWN_SAMPLE_FACTOR);
             if (mOrientation != 0 || mMirror) {
                 Matrix m = new Matrix();
@@ -167,8 +177,16 @@ public class PhotoUI implements PieListener,
 
         @Override
         protected void onPostExecute(Bitmap bitmap) {
-            mPreviewThumb.setImageBitmap(bitmap);
-            mAnimationManager.startCaptureAnimation(mPreviewThumb);
+        	synchronized (MediaSaveService.obj) {
+        		MediaSaveService.mList.remove(this);
+				if(MediaSaveService.mList.size() > 0){
+					MediaSaveService.mHandler.sendEmptyMessage(MediaSaveService.TASK_MSG);
+				}
+        	}
+        	if(mPreviewThumb != null && !mActivity.isFinishing()){
+        		mPreviewThumb.setImageBitmap(bitmap);
+        		mAnimationManager.startCaptureAnimation(mPreviewThumb);
+        	}
         }
     }
 
@@ -188,9 +206,10 @@ public class PhotoUI implements PieListener,
         }
     }
 
-    public PhotoUI(CameraActivity activity, PhotoController controller, View parent) {
+    public PhotoUI(CameraActivity activity, PhotoController controller, PhotoModule photoModule,View parent) {
         mActivity = activity;
         mController = controller;
+        mPhotoModule = photoModule;
         mRootView = parent;
 
         mActivity.getLayoutInflater().inflate(R.layout.photo_module,
@@ -218,7 +237,7 @@ public class PhotoUI implements PieListener,
         }
         mCameraControls = (CameraControls) mRootView.findViewById(R.id.camera_controls);
         mAnimationManager = new AnimationManager();
-    }
+    } 
 
     public void setSurfaceTextureSizeChangedListener(SurfaceTextureSizeChangedListener listener) {
         mSurfaceTextureSizeListener = listener;
@@ -363,7 +382,95 @@ public class PhotoUI implements PieListener,
     public void animateCapture(final byte[] jpegData, int orientation, boolean mirror) {
         // Decode jpeg byte array and then animate the jpeg
         DecodeTask task = new DecodeTask(jpegData, orientation, mirror);
+        synchronized (MediaSaveService.obj) {
+        	MediaSaveService.mList.add(0, task);
+        	if(MediaSaveService.mList.size() == 1){
+        		MediaSaveService.mHandler.sendEmptyMessage(MediaSaveService.TASK_MSG);
+        	}
+		}
+//        task.execute();
+    }
+    private static boolean mIsEndQuickTake = false;
+	public void quickTakePictureAnimate(final byte[] jpegData, int orientation,boolean isEndQuickTake) {
+		mIsEndQuickTake = isEndQuickTake;
+		if(mIsEndQuickTake){
+			hidePreView();
+			return;
+		}
+		mAnimationManager.startFlashAnimation(mFlashOverlay);
+		QuickTakePictureDecodeTask task = new QuickTakePictureDecodeTask(jpegData, orientation);
         task.execute();
+	}
+	
+	private void hidePreView(){
+		mPreviewThumbHandler.removeMessages(SHOW_MSG);
+		mPreviewThumbHandler.removeMessages(HIDE_MSG);
+		mPreviewThumbHandler.sendEmptyMessage(HIDE_MSG);
+	}
+	
+	private void showPreView(){
+		mPreviewThumbHandler.removeMessages(SHOW_MSG);
+		mPreviewThumbHandler.removeMessages(HIDE_MSG);
+		mPreviewThumbHandler.sendEmptyMessage(SHOW_MSG);
+	}
+	
+	private final int HIDE_MSG = 0x01;
+	private final int SHOW_MSG = 0x02;
+	private Handler mPreviewThumbHandler = new Handler(){
+		@Override
+		public void handleMessage(Message msg) {
+			switch (msg.what) {
+			case HIDE_MSG:
+				try{
+					mPreviewThumb.setVisibility(View.GONE);
+				}catch(Exception e){
+					e.printStackTrace();
+				}
+				break;
+			case SHOW_MSG:
+				try{
+					mPreviewThumb.setVisibility(View.VISIBLE);
+				}catch(Exception e){
+					e.printStackTrace();
+				}
+				break;
+			}
+		}
+		
+	};
+	
+	private class QuickTakePictureDecodeTask extends AsyncTask<Void, Void, Bitmap> {
+        private final byte [] mData;
+        private int mOrientation;
+
+        public QuickTakePictureDecodeTask(byte[] data, int orientation) {
+            mData = data;
+            mOrientation = orientation;
+        }
+
+        @Override
+        protected Bitmap doInBackground(Void... params) {
+        	if(mIsEndQuickTake || mData == null){
+        		hidePreView();
+    			return null;
+    		}
+            Bitmap bitmap = CameraUtil.downSample(mData, DOWN_SAMPLE_FACTOR);
+            if(mIsEndQuickTake){
+            	hidePreView();
+    			return null;
+    		}
+            return bitmap;
+        }
+
+        @Override
+        protected void onPostExecute(Bitmap bitmap) {
+        	if(mIsEndQuickTake || bitmap == null){
+        		hidePreView();
+    			return;
+    		}
+            mPreviewThumb.setImageBitmap(bitmap);
+            showPreView();
+        }
     }
 
     private void openMenu() {
@@ -451,6 +558,7 @@ public class PhotoUI implements PieListener,
         // Initialize shutter button.
         mShutterButton.setImageResource(R.drawable.btn_new_shutter);
         mShutterButton.setOnShutterButtonListener(mController);
+        mShutterButton.setRepeatListener(mPhotoModule, 50);
         mShutterButton.setVisibility(View.VISIBLE);
     }
 
@@ -526,12 +634,15 @@ public class PhotoUI implements PieListener,
         mOnScreenIndicators.updateExposureOnScreenIndicator(params,
                 CameraSettings.readExposure(prefs));
         mOnScreenIndicators.updateFlashOnScreenIndicator(params.getFlashMode());
-        int wbIndex = 2;
+        int wbIndex = -1;
+        String wb = params.getWhiteBalance();
         ListPreference pref = group.findPreference(CameraSettings.KEY_WHITE_BALANCE);
         if (pref != null) {
-            wbIndex = pref.getCurrentIndex();
+            wbIndex = pref.findIndexOfValue(wb);
         }
-        mOnScreenIndicators.updateWBIndicator(wbIndex);
+        // make sure the correct value was found
+        // otherwise use auto index
+        mOnScreenIndicators.updateWBIndicator(wbIndex < 0 ? 2 : wbIndex);
         boolean location = RecordLocationPreference.get(
                 prefs, mActivity.getContentResolver());
         mOnScreenIndicators.updateLocationIndicator(location);
@@ -877,6 +988,10 @@ public class PhotoUI implements PieListener,
         mFaceView.setMirror(mirror);
         mFaceView.resume();
     }
+
+	public void setFaceListener(SmileFaceListener listener){
+		mFaceView.setFaceListener(listener);
+	}
 
     @Override
     public void onFaceDetection(Face[] faces, CameraManager.CameraProxy camera) {

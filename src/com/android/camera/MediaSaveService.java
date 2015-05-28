@@ -25,13 +25,18 @@ import android.location.Location;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Binder;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Message;
 import android.provider.MediaStore.Video;
 import android.util.Log;
+import android.widget.Toast;
 
 import com.android.camera.exif.ExifInterface;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
 /*
  * Service for saving images in the background thread.
@@ -40,13 +45,17 @@ public class MediaSaveService extends Service {
     public static final String VIDEO_BASE_URI = "content://media/external/video/media";
 
     // The memory limit for unsaved image is 20MB.
-    private static final int SAVE_TASK_MEMORY_LIMIT = 20 * 1024 * 1024;
+    private static final int SAVE_TASK_MEMORY_LIMIT = 150 * 1024 * 1024;
     private static final String TAG = "CAM_" + MediaSaveService.class.getSimpleName();
 
     private final IBinder mBinder = new LocalBinder();
     private Listener mListener;
     // Memory used by the total queued save request, in bytes.
-    private long mMemoryUse;
+    private volatile long mMemoryUse;
+    private Object object = new Object();
+    private volatile int noSaveImageCount = 0;
+    private boolean isFullQuickTake = false;
+    public static int QUICK_TAKE_IMAGE_MAX_NUM = 20;
 
     public interface Listener {
         public void onQueueStatus(boolean full);
@@ -79,12 +88,55 @@ public class MediaSaveService extends Service {
     @Override
     public void onCreate() {
         mMemoryUse = 0;
+        synchronized (object) {
+        	noSaveImageCount = 0;
+        	isFullQuickTake = false;
+        }
     }
 
     public boolean isQueueFull() {
+    	synchronized (object) {
+			if(mMemoryUse >= SAVE_TASK_MEMORY_LIMIT){
+				isFullQuickTake = true;
+			}
+		}
         return (mMemoryUse >= SAVE_TASK_MEMORY_LIMIT);
     }
-
+    
+    public void setFullQuickTake(){
+    	synchronized (object) {
+    		isFullQuickTake = true;
+		}
+    }
+    
+    public boolean hasImageNoSave(){
+    	synchronized (object) {
+			return noSaveImageCount > 0 && isFullQuickTake;
+		}
+    }
+    
+    public static List<AsyncTask> mList = new ArrayList<AsyncTask>();
+    public static Object obj = new Object();
+    public static final int TASK_MSG = 0x01;
+    public static Handler mHandler = new Handler(){
+		@Override
+		public void handleMessage(Message msg) {
+			switch (msg.what) {
+			case TASK_MSG:
+				if(mList != null && mList.size() > 0){
+					final AsyncTask task = mList.get(0);
+					if(task instanceof ImageSaveTask){
+						((ImageSaveTask)task).execute();
+					}else{
+						((PhotoUI.DecodeTask)task).execute();
+					}
+				}
+				break;
+			}
+		}
+    	
+    };
+    
     public void addImage(final byte[] data, String title, long date, Location loc,
             int width, int height, int orientation, ExifInterface exif,
             OnMediaSavedListener l, ContentResolver resolver) {
@@ -92,15 +144,33 @@ public class MediaSaveService extends Service {
             Log.e(TAG, "Cannot add image when the queue is full");
             return;
         }
+        if(isFullQuickTake){
+        	synchronized (object) {
+				if(noSaveImageCount == 0){
+					isFullQuickTake = false;
+				}else{
+					return;
+				}
+			}
+        }
         ImageSaveTask t = new ImageSaveTask(data, title, date,
                 (loc == null) ? null : new Location(loc),
                 width, height, orientation, exif, resolver, l);
-
+        
         mMemoryUse += data.length;
+        synchronized (object) {
+			noSaveImageCount += 1;
+		}
         if (isQueueFull()) {
             onQueueFull();
         }
-        t.execute();
+        synchronized (obj) {
+			mList.add(mList.size(),t);
+			if(mList.size() == 1){
+				mHandler.sendEmptyMessage(TASK_MSG);
+			}
+		}
+//        t.execute();
     }
 
     public void addImage(final byte[] data, String title, long date, Location loc,
@@ -185,9 +255,18 @@ public class MediaSaveService extends Service {
 
         @Override
         protected void onPostExecute(Uri uri) {
+        	synchronized (obj) {
+				mList.remove(this);
+				if(mList.size() > 0){
+					mHandler.sendEmptyMessage(TASK_MSG);
+				}
+			}
             if (listener != null) listener.onMediaSaved(uri);
             boolean previouslyFull = isQueueFull();
             mMemoryUse -= data.length;
+            synchronized (object) {
+    			noSaveImageCount -= 1;
+    		}
             if (isQueueFull() != previouslyFull) onQueueAvailable();
         }
     }

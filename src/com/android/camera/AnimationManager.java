@@ -37,6 +37,8 @@ public class AnimationManager {
 
     private ObjectAnimator mFlashAnim;
     private AnimatorSet mCaptureAnimator;
+    
+    private boolean USE_CAPTURE_LIGHT = false;
 
     /**
      * Starts capture animation.
@@ -132,6 +134,9 @@ public class AnimationManager {
     * @params flashOverlay the overlay that will animate on alpha to make the flash impression
     */
     public void startFlashAnimation(final View flashOverlay) {
+    	if(!USE_CAPTURE_LIGHT){
+    		return;
+    	}
         // End the previous animation if the previous one is still running
         if (mFlashAnim != null && mFlashAnim.isRunning()) {
             mFlashAnim.cancel();
@@ -171,6 +176,9 @@ public class AnimationManager {
      * Cancels on-going flash animation and capture animation, if any.
      */
     public void cancelAnimations() {
+    	if(!USE_CAPTURE_LIGHT){
+    		return;
+    	}
         // End the previous animation if the previous one is still running
         if (mFlashAnim != null && mFlashAnim.isRunning()) {
             mFlashAnim.cancel();

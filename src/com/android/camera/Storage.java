@@ -124,7 +124,7 @@ public class Storage {
         // Clockwise rotation in degrees. 0, 90, 180, or 270.
         values.put(ImageColumns.ORIENTATION, orientation);
         values.put(ImageColumns.DATA, path);
-        values.put(ImageColumns.SIZE, jpegLength);
+        values.put(ImageColumns.SIZE, new File(path).length());
 
         setImageSize(values, width, height);
 

@@ -162,8 +162,10 @@ public class PieController {
                     IconListPreference pref = (IconListPreference) mPreferenceGroup
                             .findPreference(prefKey);
                     int index = pref.findIndexOfValue(pref.getValue());
+                    Log.d("camera",pref.getKey()+"item onclick before index="+index);
                     CharSequence[] values = pref.getEntryValues();
                     index = (index + 1) % values.length;
+                    Log.d("camera",pref.getKey()+"item onclick index="+index);
                     pref.setValueIndex(index);
                     fitem.setLabel(pref.getLabels()[index]);
                     fitem.setImageResource(mActivity,
@@ -214,6 +216,7 @@ public class PieController {
         PieItem item = mPreferenceMap.get(pref);
         String overrideValue = mOverrides.get(pref);
         int[] iconIds = pref.getLargeIconIds();
+        Log.d("camera",pref.getKey()+"reloadPreference"+iconIds);
         if (iconIds != null) {
             // Each entry has a corresponding icon.
             int index;

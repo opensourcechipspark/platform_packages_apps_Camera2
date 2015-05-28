@@ -17,7 +17,9 @@
 package com.android.camera;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.ImageView;
@@ -28,8 +30,77 @@ import android.widget.ImageView;
  * pressed state changes.
  */
 public class ShutterButton extends ImageView {
+	
+	private static final String TAG = "ShutterButton";
 
     private boolean mTouchEnabled = true;
+    
+    private long mStart;//长按开始时间  
+    private int mRepeatCount;//长按重复次数
+    private RepeatListener mRepeatListener;//
+    private long mInterval = 500;//长按一次持续时间
+    
+    private Runnable mThread = new Runnable(){  
+        public void run(){  
+            Log.d(TAG, "mRepeaterThread run()");  
+            doRepeat(false);  
+            if (isPressed()){  
+                Log.d(TAG, "mRepeaterThread run() press");  
+                postDelayed(this, mInterval);//延迟mInterval后执行当前线程  
+            }  
+        }  
+    };  
+    
+    /** 
+     * @param end 表示最后一次长按，即结束长按事件 
+     */  
+    private void doRepeat(boolean end) {  
+        Log.d(TAG, "mRepeaterThread run() end=" + end);  
+        long now = SystemClock.elapsedRealtime();//获取当前时间  
+        if (mRepeatListener != null)  
+        {  
+        	mRepeatListener.onRepeat(this, now - mStart, end ? -1 : mRepeatCount++);  
+        }  
+    }
+    
+    /** 
+     * 长按结束 
+     */  
+    private void endRepeat(){  
+        doRepeat(true);  
+        mStart = 0;  
+    }
+    
+    /** 
+     * 设置长按监听事件，初始化mInterval 
+     */  
+    public void setRepeatListener(RepeatListener listener, long interval){  
+        Log.d(TAG, "++++++++++++++++setRepeatListener interval=" + interval);  
+        mRepeatListener = listener;  
+        mInterval = interval;  
+    } 
+    
+    @Override  
+    public boolean performLongClick()  
+    {  
+        Log.d(TAG, "================performLongClick");  
+        mStart = SystemClock.elapsedRealtime();//获取系统当前时间  
+        mRepeatCount = 0;  
+        //post(mThread);//调用post()方法，执行mThread  
+        return true;  
+    } 
+    
+    @Override  
+    public boolean onTouchEvent(MotionEvent event){  
+        if (event.getAction() == MotionEvent.ACTION_UP){  
+            Log.d(TAG, "onTouchEvent UP");  
+            //removeCallbacks(mThread);//删除队列当中未执行的线程对象     
+            //if (mStart != 0){  
+            //    endRepeat();  
+            //}  
+        }  
+        return super.onTouchEvent(event);  
+    }  
 
     /**
      * A callback to be invoked when a ShutterButton's pressed state changes.
@@ -49,6 +120,8 @@ public class ShutterButton extends ImageView {
 
     public ShutterButton(Context context, AttributeSet attrs) {
         super(context, attrs);
+        setFocusable(true); //设置焦点  
+        setLongClickable(true); //启用长按事件，长按后会执行performLongClick()  
     }
 
     public void setOnShutterButtonListener(OnShutterButtonListener listener) {
@@ -126,5 +199,15 @@ public class ShutterButton extends ImageView {
             mListener.onShutterButtonClick();
         }
         return result;
+    }
+    
+    public interface RepeatListener
+    {
+        /** manpeng
+         * @param v 用户传入的Button对象
+         * @param duration 延迟的毫秒数
+         * @param repeatcount 重复次数回调
+         */
+        void onRepeat(View v, long duration, int repeatcount);
     }
 }

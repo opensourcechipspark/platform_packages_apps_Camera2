@@ -20,6 +20,7 @@ import java.util.Locale;
 
 import android.content.res.Resources;
 import android.hardware.Camera.Parameters;
+import android.util.Log;
 
 import com.android.camera.ui.AbstractSettingPopup;
 import com.android.camera.ui.CountdownTimerPopup;
@@ -163,6 +164,33 @@ public class PhotoMenu extends PieController
             item = makeItem(CameraSettings.KEY_SCENE_MODE);
             more.addItem(item);
         }
+        
+        //Smile mode
+        //item = makeSwitchItem(CameraSettings.KEY_SMILE_MODE, true);
+        //more.addItem(item);
+        //if (mActivity.isSecureCamera()) {
+            // Prevent location preference from getting changed in secure camera mode
+            //item.setEnabled(false);
+        //}
+        if(!mUI.isSupportSmilePhoto()){
+        	//return;
+        }
+        final ListPreference smilePref = group.findPreference(CameraSettings.KEY_SMILE_MODE);
+        item = makeItem(R.drawable.smile);
+        item.setLabel(res.getString(R.string.pref_camera_picturesize_title).toUpperCase(locale));
+        item.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(PieItem item) {
+                ListPrefSettingPopup popup = (ListPrefSettingPopup) mActivity.getLayoutInflater().inflate(
+                        R.layout.list_pref_setting_popup, null, false);
+                popup.initialize(smilePref);
+                popup.setSettingChangedListener(PhotoMenu.this);
+                mUI.dismissPopup();
+                mPopup = popup;
+                mUI.showPopup(mPopup);
+            }
+        });
+        more.addItem(item);
     }
 
     @Override

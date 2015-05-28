@@ -44,6 +44,7 @@ import com.android.camera.CameraPreference.OnPreferenceChangedListener;
 import com.android.camera.ui.AbstractSettingPopup;
 import com.android.camera.ui.CameraControls;
 import com.android.camera.ui.CameraRootView;
+import com.android.camera.ui.FocusIndicator;
 import com.android.camera.ui.ModuleSwitcher;
 import com.android.camera.ui.PieRenderer;
 import com.android.camera.ui.RenderOverlay;
@@ -51,11 +52,12 @@ import com.android.camera.ui.RotateLayout;
 import com.android.camera.ui.ZoomRenderer;
 import com.android.camera.util.CameraUtil;
 import com.android.camera2.R;
+import com.android.camera.VideoFocusManager.FocusUI;
 
 import java.util.List;
 
 public class VideoUI implements PieRenderer.PieListener,
-        PreviewGestures.SingleTapListener,
+        FocusUI,PreviewGestures.SingleTapListener,
         CameraRootView.MyDisplayListener,
         SurfaceTextureListener, SurfaceHolder.Callback {
     private static final String TAG = "CAM_VideoUI";
@@ -759,4 +761,36 @@ public class VideoUI implements PieRenderer.PieListener,
         Log.v(TAG, "Surface destroyed");
         mController.stopPreview();
     }
+    
+    @Override
+    public void clearFocus() {
+        FocusIndicator indicator = getFocusIndicator();
+        if (indicator != null) indicator.clear();
+    }
+
+    @Override
+    public void setFocusPosition(int x, int y) {
+        mPieRenderer.setFocus(x, y);
+    }
+
+    @Override
+    public void onFocusStarted() {
+        getFocusIndicator().showStart();
+    }
+
+    @Override
+    public void onFocusSucceeded(boolean timeout) {
+        getFocusIndicator().showSuccess(timeout);
+    }
+
+    @Override
+    public void onFocusFailed(boolean timeout) {
+        getFocusIndicator().showFail(timeout);
+    }
+ // focus UI implementation
+
+    private FocusIndicator getFocusIndicator() {
+        return mPieRenderer;
+    }
+
 }

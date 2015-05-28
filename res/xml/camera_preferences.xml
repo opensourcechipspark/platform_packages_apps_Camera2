@@ -107,4 +107,14 @@
             camera:title="@string/pref_camera_timer_sound_title"
             camera:entries="@array/pref_camera_timer_sound_entries"
             camera:entryValues="@array/pref_camera_timer_sound_entryvalues" />
+    
+    <SmilePhotoPreference
+            camera:key="pref_smile_mode_key"
+            camera:defaultValue="@string/pref_camera_smile_default"
+            camera:title="@string/pref_camera_smile_title"
+            camera:icons="@array/camera_smile_icons"
+            camera:largeIcons="@array/camera_smile_largeicons"
+            camera:entries="@array/pref_camera_smile_entries"
+            camera:labelList="@array/pref_camera_smile_labels"
+            camera:entryValues="@array/pref_camera_smile_entryvalues" />
 </PreferenceGroup>

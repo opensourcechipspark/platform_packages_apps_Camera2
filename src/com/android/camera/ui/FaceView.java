@@ -31,6 +31,7 @@ import android.util.Log;
 import android.view.View;
 
 import com.android.camera.PhotoUI;
+import com.android.camera.PhotoModule;
 import com.android.camera.util.CameraUtil;
 import com.android.camera2.R;
 
@@ -66,6 +67,13 @@ public class FaceView extends View
     private static final int MSG_SWITCH_FACES = 1;
     private static final int SWITCH_DELAY = 70;
     private boolean mStateSwitchPending = false;
+
+	SmileFaceListener mListener;
+
+	public interface SmileFaceListener {
+	       public void onSmileFaceSnap();
+	}
+
     private Handler mHandler = new Handler() {
         @Override
         public void handleMessage(Message msg) {
@@ -97,7 +105,11 @@ public class FaceView extends View
         mUncroppedWidth = uncroppedWidth;
         mUncroppedHeight = uncroppedHeight;
     }
-
+	
+	public void setFaceListener(SmileFaceListener listener){
+		mListener = listener;
+	}
+	
     public void setFaces(Face[] faces) {
         if (LOGV) Log.v(TAG, "Num of faces=" + faces.length);
         if (mPause) return;
@@ -118,6 +130,10 @@ public class FaceView extends View
         }
         mFaces = faces;
         invalidate();
+		if((mListener != null) && (faces.length > 0) && (faces[0].score == 100)){
+            mListener.onSmileFaceSnap();
+			mListener = null;
+			}
     }
 
     public void setDisplayOrientation(int orientation) {
@@ -166,6 +182,7 @@ public class FaceView extends View
         // drawable.
         mColor = mFocusingColor;
         mFaces = null;
+		mListener = null;		
         invalidate();
     }
 

@@ -2,7 +2,7 @@
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.android.camera2"
-    android:versionName="1.0.0-20140107">
+    android:versionName="1.0.0-20140630">
 
     <uses-sdk
         android:minSdkVersion="14"
@@ -53,7 +53,7 @@
         <activity
             android:name="com.android.camera.CameraActivity"
             android:clearTaskOnLaunch="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:configChanges="keyboard|orientation|screenSize|keyboardHidden"
             android:icon="@mipmap/ic_launcher_camera"
             android:label="@string/app_name"
             android:logo="@mipmap/ic_launcher_gallery"
